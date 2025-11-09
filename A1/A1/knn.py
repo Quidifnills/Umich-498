@@ -60,7 +60,13 @@ def compute_distances_two_loops(x_train: torch.Tensor, x_test: torch.Tensor):
     # functions from torch.nn or torch.nn.functional.                        #
     ##########################################################################
     # Replace "pass" statement with your code
-    pass
+    # Flatten each image or sample to 1D vector
+    x_train_flat = x_train.view(num_train, -1)
+    x_test_flat = x_test.view(num_test, -1)
+
+    for i in range(num_train):
+        for j in range(num_test):
+            dists[i, j] = torch.sum((x_train_flat[i] - x_test_flat[j]) ** 2)
     ##########################################################################
     #                           END OF YOUR CODE                             #
     ##########################################################################
@@ -104,7 +110,12 @@ def compute_distances_one_loop(x_train: torch.Tensor, x_test: torch.Tensor):
     # functions from torch.nn or torch.nn.functional.                        #
     ##########################################################################
     # Replace "pass" statement with your code
-    pass
+    x_test_flatten = x_test.view(num_test, -1)
+    x_train_flatten = x_train.view(num_train, -1)
+
+    for i in range(num_train):
+        # Specify the dim for sum
+        dists[i, :] = torch.sum((x_train_flatten[i] - x_test_flatten)**2, dim=1)
     ##########################################################################
     #                           END OF YOUR CODE                             #
     ##########################################################################
@@ -155,8 +166,23 @@ def compute_distances_no_loops(x_train: torch.Tensor, x_test: torch.Tensor):
     # HINT: Try to formulate the Euclidean distance using two broadcast sums #
     #       and a matrix multiply.                                           #
     ##########################################################################
-    # Replace "pass" statement with your code
-    pass
+    # 1) Flatten to (N, D) and (M, D)
+    X = x_train.view(num_train, -1)   # (N, D)
+    Y = x_test.view(num_test, -1)     # (M, D)
+
+    # 2) Compute squared L2 norms
+    #    X2: (N, 1), Y2: (1, M)  —— 保持列/行形状便于广播
+    X2 = (X ** 2).sum(dim=1, keepdim=True)   # (N, 1)
+    Y2 = (Y ** 2).sum(dim=1, keepdim=True).T # (1, M)
+
+    # 3) Cross term via matrix multiply: X @ Y^T -> (N, M)
+    XY = X @ Y.T
+
+    # 4) Broadcast and combine: ||x||^2 + ||y||^2 - 2 x·y
+    dists = X2 + Y2 - 2 * XY
+    
+    # 5) 数值稳定：理论上非负，浮点误差可能导致极小负数
+    dists.clamp_(min=0)
     ##########################################################################
     #                           END OF YOUR CODE                             #
     ##########################################################################
@@ -199,7 +225,10 @@ def predict_labels(dists: torch.Tensor, y_train: torch.Tensor, k: int = 1):
     # HINT: Look up the function torch.topk                                  #
     ##########################################################################
     # Replace "pass" statement with your code
-    pass
+    _, nn_indices = torch.topk(dists, k, dim=0, largest=False)
+    nn_labels = y_train[nn_indices]
+    sorted_labels, _ = torch.sort(nn_labels, dim=0)
+    y_pred = torch.mode(sorted_labels, dim = 0).values
     ##########################################################################
     #                           END OF YOUR CODE                             #
     ##########################################################################
@@ -223,7 +252,8 @@ class KnnClassifier:
         # `self.x_train` and `self.y_train`, accordingly.                    #
         ######################################################################
         # Replace "pass" statement with your code
-        pass
+        self.x_train = x_train
+        self.y_train = y_train
         ######################################################################
         #                         END OF YOUR CODE                           #
         ######################################################################
@@ -247,7 +277,8 @@ class KnnClassifier:
         # to predict output labels.                                          #
         ######################################################################
         # Replace "pass" statement with your code
-        pass
+        dists = compute_distances_no_loops(self.x_train, x_test)
+        y_test_pred = predict_labels(dists, self.y_train, k)
         ######################################################################
         #                         END OF YOUR CODE                           #
         ######################################################################
@@ -321,7 +352,8 @@ def knn_cross_validate(
     # HINT: torch.chunk                                                      #
     ##########################################################################
     # Replace "pass" statement with your code
-    pass
+    x_train_folds = list(torch.chunk(x_train, num_folds, dim=0))
+    y_train_folds = list(torch.chunk(y_train, num_folds, dim=0))
     ##########################################################################
     #                           END OF YOUR CODE                             #
     ##########################################################################
@@ -342,7 +374,35 @@ def knn_cross_validate(
     # HINT: torch.cat                                                        #
     ##########################################################################
     # Replace "pass" statement with your code
-    pass
+    for k in k_choices:
+        # Initialize an empty list to store the accuracies for this k
+        k_to_accuracies[k] = []
+        # Loop 'num_folds' times, once for each fold
+        for i in range(num_folds):
+            # The i-th fold is our validation set
+            x_val_fold = x_train_folds[i]
+            y_val_fold = y_train_folds[i]
+            
+            # Combine all other folds into a new training set
+            # We use list slicing to get all folds *before* i 
+            # and all folds *after* i
+            x_train_current_list = x_train_folds[:i] + x_train_folds[i+1:]
+            y_train_current_list = y_train_folds[:i] + y_train_folds[i+1:]
+            
+            # Use torch.cat to join the list of tensors into a single tensor.
+            # We concatenate along dim=0 (the batch dimension) to stack them.
+            x_train_current = torch.cat(x_train_current_list, dim=0)
+            y_train_current = torch.cat(y_train_current_list, dim=0)
+            
+            # Create a new classifier instance
+            classifier = KnnClassifier(x_train_current, y_train_current)
+            
+            # Calculate accuracy for this k, this fold
+            # Add it to our list for this k
+            k_to_accuracies[k].append(classifier.check_accuracy(
+                                        x_val_fold, 
+                                        y_val_fold, 
+                                        k, quiet=True))
     ##########################################################################
     #                           END OF YOUR CODE                             #
     ##########################################################################
@@ -372,7 +432,12 @@ def knn_get_best_k(k_to_accuracies: Dict[int, List]):
     # the value of k that has the highest mean accuracy accross all folds.   #
     ##########################################################################
     # Replace "pass" statement with your code
-    pass
+    best_accuracy = 0
+    for k, accuracies in k_to_accuracies.items():
+        accuracy = sum(accuracies) / len(accuracies)
+        if accuracy > best_accuracy:
+            best_k = k
+            best_accuracy = accuracy
     ##########################################################################
     #                           END OF YOUR CODE                             #
     ##########################################################################
